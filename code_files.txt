@@ -1,0 +1,272 @@
+import streamlit as st
+import base64
+from io import BytesIO
+from PIL import Image
+import pandas as pd
+from utils.openai_helper import analyze_plant_disease
+from utils.data_helper import (
+    get_irrigation_recommendation,
+    get_mock_experts,
+    SOIL_TYPES,
+    CLIMATE_TYPES
+)
+
+st.set_page_config(
+    page_title="Agro Assis",
+    page_icon="🌱",
+    layout="wide"
+)
+
+st.title("🌱 Agro Assis")
+
+# Main navigation
+tab1, tab2, tab3 = st.tabs(["Irrigation Advisor", "Disease Detection", "Expert Connect"])
+
+with tab1:
+    st.header("Irrigation Recommendation System")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        soil_type = st.selectbox("Soil Type", SOIL_TYPES)
+        temperature = st.slider("Average Temperature (°C)", 0, 50, 25)
+        humidity = st.slider("Humidity (%)", 0, 100, 50)
+        rainfall = st.number_input("Recent Rainfall (mm)", 0.0, 500.0, 0.0)
+        climate_type = st.selectbox("Climate Type", CLIMATE_TYPES)
+
+    if st.button("Get Recommendations"):
+        recommendation = get_irrigation_recommendation(
+            soil_type, temperature, humidity, rainfall, climate_type
+        )
+
+        with col2:
+            st.info("Irrigation Recommendations")
+            st.write(recommendation["schedule"])
+            st.metric("Water requirement (Liters/m²)", recommendation["water_amount"])
+            st.write("**Additional Notes:**")
+            st.write(recommendation["notes"])
+
+with tab2:
+    st.header("Plant Disease Detection")
+
+    uploaded_file = st.file_uploader("Upload a photo of your plant", type=["jpg", "jpeg", "png"])
+
+    if uploaded_file:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_column_width=True)
+
+        if st.button("Analyze Disease"):
+            with st.spinner("Analyzing image..."):
+                # Convert image to base64
+                buffered = BytesIO()
+                image.save(buffered, format="JPEG")
+                img_str = base64.b64encode(buffered.getvalue()).decode()
+
+                try:
+                    analysis = analyze_plant_disease(img_str)
+
+                    st.subheader("Analysis Results")
+                    st.json(analysis)
+
+                    if analysis.get("disease_detected"):
+                        st.error(f"Disease Detected: {analysis['disease_name']}")
+                        st.write("**Treatment Recommendations:**")
+                        for treatment in analysis["treatments"]:
+                            st.write(f"- {treatment}")
+                    else:
+                        st.success("No disease detected! Plant appears healthy.")
+
+                except Exception as e:
+                    st.error(f"Error analyzing image: {str(e)}")
+
+with tab3:
+    st.header("Connect with Agricultural Experts")
+
+    experts = get_mock_experts()
+
+    # Expert Directory
+    st.subheader("Expert Directory")
+    for expert in experts:
+        with st.expander(f"{expert['name']} - {expert['specialization']}"):
+            st.write(f"**Experience:** {expert['experience']} years")
+            st.write(f"**Location:** {expert['location']}")
+            st.write(f"**Expertise Areas:** {', '.join(expert['expertise'])}")
+
+    # Contact Form
+    st.subheader("Contact Form")
+    with st.form("contact_form"):
+        name = st.text_input("Your Name")
+        email = st.text_input("Your Email")
+        expert_select = st.selectbox(
+            "Select Expert",
+            [f"{expert['name']} - {expert['specialization']}" for expert in experts]
+        )
+        message = st.text_area("Your Message")
+
+        if st.form_submit_button("Send Message"):
+            st.success("Message sent! The expert will contact you soon.")
+```
+
+```python
+import os
+import json
+from openai import OpenAI
+
+# the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
+# do not change this unless explicitly requested by the user
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+openai = OpenAI(api_key=OPENAI_API_KEY)
+
+def analyze_plant_disease(base64_image):
+    """Analyze plant image for diseases using OpenAI's vision capabilities"""
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert agricultural scientist specializing in plant disease detection. "
+                    "Analyze the image and provide detailed information about any diseases detected, including "
+                    "treatment recommendations. Respond in JSON format with the following structure: "
+                    "{'disease_detected': boolean, 'disease_name': string, 'confidence': float, "
+                    "'description': string, 'treatments': list of strings}"
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Analyze this plant image for diseases and provide treatment recommendations."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                        }
+                    ]
+                }
+            ],
+            response_format={"type": "json_object"}
+        )
+
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        raise Exception(f"Failed to analyze image: {str(e)}")
+```
+
+```python
+from data.mock_data import MOCK_EXPERTS
+
+SOIL_TYPES = [
+    "Sandy",
+    "Clay",
+    "Loamy",
+    "Silt",
+    "Peat",
+    "Chalky"
+]
+
+CLIMATE_TYPES = [
+    "Tropical",
+    "Subtropical",
+    "Mediterranean",
+    "Temperate",
+    "Continental",
+    "Arid"
+]
+
+def get_irrigation_recommendation(soil_type, temperature, humidity, rainfall, climate_type):
+    """
+    Calculate irrigation recommendations based on input parameters.
+    Returns a dictionary with schedule, water amount, and notes.
+    """
+    # Base water requirements (L/m²/day) for different soil types
+    soil_water_needs = {
+        "Sandy": 7,
+        "Clay": 4,
+        "Loamy": 5,
+        "Silt": 6,
+        "Peat": 3,
+        "Chalky": 6
+    }
+
+    # Calculate base water requirement
+    base_water = soil_water_needs[soil_type]
+
+    # Adjust for temperature
+    temp_factor = max(1, (temperature - 20) * 0.1 + 1)
+
+    # Adjust for humidity
+    humidity_factor = max(0.5, (100 - humidity) / 100)
+
+    # Adjust for rainfall
+    rainfall_reduction = min(1, rainfall / 50)  # 50mm rainfall = max reduction
+
+    # Calculate final water amount
+    water_amount = round(base_water * temp_factor * humidity_factor * (1 - rainfall_reduction), 1)
+
+    # Generate schedule and notes
+    schedule = []
+    notes = []
+
+    if temperature > 30:
+        schedule.append("Water early morning or late evening")
+        notes.append("High temperature detected - avoid midday watering")
+    else:
+        schedule.append("Water during early morning")
+
+    if rainfall > 0:
+        notes.append(f"Recent rainfall of {rainfall}mm has been considered in the calculation")
+
+    if humidity < 30:
+        notes.append("Low humidity - consider additional misting for sensitive plants")
+
+    return {
+        "schedule": schedule,
+        "water_amount": water_amount,
+        "notes": notes
+    }
+
+def get_mock_experts():
+    """Return list of mock agricultural experts"""
+    return MOCK_EXPERTS
+```
+
+```python
+MOCK_EXPERTS = [
+    {
+        "name": "Dr. Sarah Johnson",
+        "specialization": "Soil Science",
+        "experience": 15,
+        "location": "California",
+        "expertise": ["Soil Analysis", "Fertility Management", "Organic Farming"]
+    },
+    {
+        "name": "Prof. Michael Chen",
+        "specialization": "Plant Pathology",
+        "experience": 20,
+        "location": "Texas",
+        "expertise": ["Disease Diagnosis", "Pest Management", "Crop Protection"]
+    },
+    {
+        "name": "Dr. Emily Rodriguez",
+        "specialization": "Irrigation Systems",
+        "experience": 12,
+        "location": "Florida",
+        "expertise": ["Water Management", "Drip Irrigation", "Climate-Smart Agriculture"]
+    },
+    {
+        "name": "James Wilson",
+        "specialization": "Organic Farming",
+        "experience": 18,
+        "location": "Oregon",
+        "expertise": ["Organic Certification", "Sustainable Practices", "Crop Rotation"]
+    }
+]
+```
+
+```toml
+[server]
+headless = true
+address = "0.0.0.0"
+port = 5000
